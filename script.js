@@ -17,18 +17,18 @@ try {
     console.log("Uplink Established.");
 } catch (e) { console.warn("Offline Mode"); }
 
+// MAP SETUP - FLORIDA CENTER
 const map = L.map('map', { 
     zoomControl: false, 
     attributionControl: false 
-}).setView([42.3314, -83.0458], 15);
+}).setView([27.6648, -81.5158], 7); // <-- CHANGED TO FLORIDA, ZOOM 7
 
-// USE MAX NATIVE ZOOM 19 for High Res
+// SATELLITE TILES
 L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
-    maxZoom: 19, 
-    maxNativeZoom: 19,
-    crossOrigin: true
+    maxZoom: 19, crossOrigin: true
 }).addTo(map);
 
+// DISPLAY COORDINATES
 map.on('move', () => {
     const c = map.getCenter();
     document.getElementById('lat-disp').innerText = c.lat.toFixed(5);
@@ -45,12 +45,29 @@ async function loadAI() {
 }
 loadAI();
 
+// --- MATH HELPERS ---
+function latLngToTile(lat, lng, zoom) {
+    const n = Math.pow(2, zoom);
+    const x = Math.floor((lng + 180) / 360 * n);
+    const latRad = lat * Math.PI / 180;
+    const y = Math.floor((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2 * n);
+    return { x, y };
+}
+
+function tileToLatLng(x, y, zoom) {
+    const n = Math.pow(2, zoom);
+    const lng = x / n * 360 - 180;
+    const latRad = Math.atan(Math.sinh(Math.PI * (1 - 2 * y / n)));
+    const lat = latRad * 180 / Math.PI;
+    return { lat, lng };
+}
+
 // --- DRAG SELECTION LOGIC ---
 let isTargeting = false;
 let startX, startY;
 const box = document.getElementById('selection-box');
 const mapContainer = document.getElementById('map');
-let isScanning = false; // Flag to stop scan
+let isScanning = false;
 
 window.toggleMode = function() {
     isTargeting = !isTargeting;
@@ -64,7 +81,7 @@ window.toggleMode = function() {
         map.dragging.disable(); 
         mapContainer.style.cursor = "crosshair";
     } else {
-        btn.innerText = "ACTIVATE DRAG SCAN";
+        btn.innerText = "ACTIVATE TURBO SCAN";
         btn.classList.remove("active");
         instr.style.display = "none";
         map.dragging.enable(); 
@@ -97,43 +114,36 @@ function moveDraw(e) {
     const rect = mapContainer.getBoundingClientRect();
     const currentX = e.clientX - rect.left;
     const currentY = e.clientY - rect.top;
-    
-    const width = currentX - startX;
-    const height = currentY - startY;
-    
-    box.style.width = Math.abs(width) + 'px';
-    box.style.height = Math.abs(height) + 'px';
-    box.style.left = (width < 0 ? currentX : startX) + 'px';
-    box.style.top = (height < 0 ? currentY : startY) + 'px';
+    box.style.width = Math.abs(currentX - startX) + 'px';
+    box.style.height = Math.abs(currentY - startY) + 'px';
+    box.style.left = (currentX < startX ? currentX : startX) + 'px';
+    box.style.top = (currentY < startY ? currentY : startY) + 'px';
 }
 
 function endDraw() {
     if (!isTargeting) return;
     const rect = box.getBoundingClientRect();
-    
     if (rect.width > 20 && rect.height > 20) {
-        // Convert screen box to Lat/Lng Bounds for Grid Scan
-        const bounds = map.containerPointToLatLng([rect.left, rect.top]);
-        const bounds2 = map.containerPointToLatLng([rect.right, rect.bottom]);
+        const p1 = map.containerPointToLatLng([rect.left, rect.top]);
+        const p2 = map.containerPointToLatLng([rect.right, rect.bottom]);
         
-        // Ensure we know NorthWest and SouthEast
-        const north = Math.max(bounds.lat, bounds2.lat);
-        const south = Math.min(bounds.lat, bounds2.lat);
-        const west = Math.min(bounds.lng, bounds2.lng);
-        const east = Math.max(bounds.lng, bounds2.lng);
+        const north = Math.max(p1.lat, p2.lat);
+        const south = Math.min(p1.lat, p2.lat);
+        const west = Math.min(p1.lng, p2.lng);
+        const east = Math.max(p1.lng, p2.lng);
 
-        startGridScan(north, south, west, east);
+        startTurboScan(north, south, west, east);
     }
     box.style.display = 'none';
 }
 
-// --- THE GRID SCANNER (Chunk by Chunk) ---
+// --- TURBO SCANNER ---
 window.cancelScan = function() {
     isScanning = false;
     document.getElementById('progress-overlay').style.display = 'none';
 };
 
-async function startGridScan(north, south, west, east) {
+async function startTurboScan(north, south, west, east) {
     if (!model) return;
     isScanning = true;
     
@@ -141,79 +151,86 @@ async function startGridScan(north, south, west, east) {
     const bar = document.getElementById('progress-fill');
     const txt = document.getElementById('progress-text');
     overlay.style.display = 'flex';
+    txt.innerText = "CALCULATING GRID...";
 
-    // 1. Define Chunk Size (roughly screen size at Zoom 19)
-    // 0.002 degrees is approx 200 meters, good for a detailed snapshot
-    const stepLat = 0.002; 
-    const stepLng = 0.003; 
-
-    // 2. Generate Grid Points
-    let points = [];
-    for (let lat = north; lat > south; lat -= stepLat) {
-        for (let lng = west; lng < east; lng += stepLng) {
-            points.push([lat, lng]);
+    const ZOOM = 19;
+    const tl = latLngToTile(north, west, ZOOM);
+    const br = latLngToTile(south, east, ZOOM);
+    
+    let tiles = [];
+    for (let x = tl.x; x <= br.x; x++) {
+        for (let y = tl.y; y <= br.y; y++) {
+            tiles.push({ x: x, y: y });
         }
     }
-    
-    // Safety limit to prevent crashing
-    if (points.length > 50) {
-        alert(`WARNING: Selection too large (${points.length} sectors). Scanning first 50 only.`);
-        points = points.slice(0, 50);
+
+    if (tiles.length > 500) {
+        if(!confirm(`Warning: This selection contains ${tiles.length} sectors. Continue?`)) {
+            cancelScan();
+            return;
+        }
     }
 
-    const total = points.length;
-    let foundCount = 0;
+    const total = tiles.length;
+    let processed = 0;
+    let found = 0;
 
-    // 3. Iterate through chunks
-    for (let i = 0; i < points.length; i++) {
-        if (!isScanning) break; // Allow abort
+    for (let i = 0; i < total; i++) {
+        if (!isScanning) break;
+
+        const tile = tiles[i];
+        const imgUrl = `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${ZOOM}/${tile.y}/${tile.x}`;
         
-        const center = points[i];
-        
-        // A. Move Map & Zoom In
-        map.setView(center, 19, { animate: false });
-        
-        // B. Wait for tiles to load (Critical for High Res)
-        await new Promise(r => setTimeout(r, 1500)); 
-        
-        // C. Capture
-        await captureAndAnalyze(center);
-        
-        // D. Update UI
-        const pct = Math.round(((i + 1) / total) * 100);
+        try {
+            const isAbandoned = await scanImage(imgUrl);
+            
+            if (isAbandoned) {
+                found++;
+                const coords = tileToLatLng(tile.x + 0.5, tile.y + 0.5, ZOOM);
+                saveTarget(isAbandoned, imgUrl, coords);
+            }
+        } catch (e) {}
+
+        processed++;
+        const pct = Math.round((processed / total) * 100);
         bar.style.width = pct + "%";
-        txt.innerText = `${pct}% COMPLETE`;
+        txt.innerText = `SCANNING... ${pct}% (${found} FOUND)`;
+        
+        if (i % 5 === 0) await new Promise(r => setTimeout(r, 10));
     }
 
-    overlay.style.display = 'none';
-    alert(`SCAN COMPLETE. Discovered ${foundCount} targets.`);
+    if(isScanning) {
+        txt.innerText = "DONE.";
+        setTimeout(() => { overlay.style.display = 'none'; }, 2000);
+    }
 }
 
-async function captureAndAnalyze(latlng) {
-    return html2canvas(document.getElementById("map"), {
-        useCORS: true, allowTaint: true, scale: 2
-    }).then(async canvas => {
-        const prediction = await model.predict(canvas);
-        const abandon = prediction.find(p => p.className === "Abandoned");
-        
-        if (abandon && abandon.probability > 0.70) {
-            saveTarget(abandon.probability, canvas.toDataURL(), latlng);
-        }
+function scanImage(url) {
+    return new Promise((resolve) => {
+        const img = new Image();
+        img.crossOrigin = "Anonymous"; 
+        img.src = url;
+        img.onload = async () => {
+            const prediction = await model.predict(img);
+            const abandon = prediction.find(p => p.className === "Abandoned");
+            if (abandon && abandon.probability > 0.75) {
+                resolve(abandon.probability);
+            } else {
+                resolve(false);
+            }
+        };
+        img.onerror = () => resolve(false);
     });
 }
 
 // --- DATABASE ---
-function saveTarget(confidence, imgData, latlng) {
+function saveTarget(confidence, imgUrl, latlng) {
     const locId = Date.now() + Math.random().toString(36).substr(2, 5);
-    // LatLng might be array or object depending on source
-    const lat = latlng[0] || latlng.lat;
-    const lng = latlng[1] || latlng.lng;
-
     firebase.database().ref('discovery/' + locId).set({
-        lat: lat,
-        lng: lng,
+        lat: latlng.lat,
+        lng: latlng.lng,
         confidence: confidence,
-        image: imgData,
+        image: imgUrl,
         timestamp: Date.now()
     });
 }
