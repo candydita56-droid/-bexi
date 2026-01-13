@@ -58,25 +58,22 @@ window.toggleMode = function() {
         btn.innerText = "DISENGAGE TARGETING";
         btn.classList.add("active");
         instr.style.display = "block";
-        map.dragging.disable(); // FREEZE MAP
+        map.dragging.disable(); 
         mapContainer.style.cursor = "crosshair";
     } else {
         btn.innerText = "ACTIVATE TARGETING";
         btn.classList.remove("active");
         instr.style.display = "none";
-        map.dragging.enable(); // UNFREEZE MAP
+        map.dragging.enable(); 
         mapContainer.style.cursor = "grab";
         box.style.display = 'none';
     }
 };
 
-// Events for Mouse & Touch
 mapContainer.addEventListener('mousedown', startDraw);
 mapContainer.addEventListener('touchstart', (e) => startDraw(e.touches[0]), {passive: false});
-
 mapContainer.addEventListener('mousemove', moveDraw);
 mapContainer.addEventListener('touchmove', (e) => moveDraw(e.touches[0]), {passive: false});
-
 mapContainer.addEventListener('mouseup', endDraw);
 mapContainer.addEventListener('touchend', endDraw);
 
@@ -85,7 +82,6 @@ function startDraw(e) {
     const rect = mapContainer.getBoundingClientRect();
     startX = e.clientX - rect.left;
     startY = e.clientY - rect.top;
-    
     box.style.left = startX + 'px';
     box.style.top = startY + 'px';
     box.style.width = '0px';
@@ -111,80 +107,96 @@ function moveDraw(e) {
 function endDraw() {
     if (!isTargeting) return;
     const rect = box.getBoundingClientRect();
-    
-    // Minimum size check (prevent accidental clicks)
+    // Scan if box is big enough
     if (rect.width > 20 && rect.height > 20) {
-        processScan(rect);
+        processGridScan(rect);
     }
-    
-    // Visual reset
     setTimeout(() => { box.style.display = 'none'; }, 200);
 }
 
-// --- SCANNING ENGINE ---
-async function processScan(rect) {
+// --- DEEP GRID SCANNING ---
+async function processGridScan(rect) {
     if (!model) return;
     
     const readout = document.getElementById("scan-readout");
-    readout.innerText = "ENHANCING & ANALYZING...";
+    readout.innerText = "INITIATING GRID SCAN...";
     
-    // 1. Full Res Capture
-    html2canvas(document.getElementById("map"), {
-        useCORS: true,
-        allowTaint: true,
-        scale: window.devicePixelRatio || 2 // Force Retina/High-Res
-    }).then(async fullCanvas => {
-        
-        // 2. Crop to Selection
-        const cropCanvas = document.createElement('canvas');
-        const scale = window.devicePixelRatio || 2;
-        
-        cropCanvas.width = rect.width * scale;
-        cropCanvas.height = rect.height * scale;
-        const ctx = cropCanvas.getContext('2d');
-        
-        ctx.drawImage(
-            fullCanvas, 
-            rect.left * scale, rect.top * scale, rect.width * scale, rect.height * scale,
-            0, 0, rect.width * scale, rect.height * scale
-        );
-
-        // 3. AI Prediction
-        const prediction = await model.predict(cropCanvas);
-        
-        let abandonP = 0;
-        for (let i = 0; i < prediction.length; i++) {
-            if (prediction[i].className === "Abandoned") abandonP = prediction[i].probability;
-        }
-
-        const percent = (abandonP * 100).toFixed(1);
-        document.getElementById("confidence-meter").style.width = percent + "%";
-        
-        if (abandonP > 0.50) {
-            readout.innerText = `TARGET IDENTIFIED (${percent}%)`;
-            // Save Image & Data to DB
-            saveTarget(abandonP, cropCanvas.toDataURL());
-        } else {
-            readout.innerText = "SECTOR CLEAR";
-        }
-        
-    }).catch(err => {
-        console.error(err);
-        readout.innerText = "SENSOR ERROR";
+    // 1. Capture the entire map view first (High Performance)
+    const scale = window.devicePixelRatio || 2;
+    const fullCanvas = await html2canvas(document.getElementById("map"), {
+        useCORS: true, allowTaint: true, scale: scale
     });
+    
+    // 2. Define Grid Parameters
+    // We break the red box into 100x100 pixel chunks to scan individually
+    const scanSize = 100; // Size of the scanner window in CSS pixels
+    const step = 80;      // Overlap slightly to catch buildings on edges
+    
+    // Adjust logic coordinates relative to the captured canvas
+    // We need to map the CSS coordinates of the red box to the Canvas coordinates
+    const mapRect = document.getElementById("map").getBoundingClientRect();
+    
+    // Red box relative to map container
+    const startX = rect.left - mapRect.left;
+    const startY = rect.top - mapRect.top;
+    
+    let targetsFound = 0;
+    
+    // 3. Loop through the red box (The "Deep Dig")
+    for (let y = startY; y < startY + rect.height; y += step) {
+        for (let x = startX; x < startX + rect.width; x += step) {
+            
+            // Safety check: Don't scan outside the box
+            if (x + scanSize > startX + rect.width || y + scanSize > startY + rect.height) continue;
+
+            // Crop this specific grid sector
+            const sectorCanvas = document.createElement('canvas');
+            sectorCanvas.width = scanSize * scale;
+            sectorCanvas.height = scanSize * scale;
+            const ctx = sectorCanvas.getContext('2d');
+            
+            ctx.drawImage(
+                fullCanvas,
+                x * scale, y * scale, scanSize * scale, scanSize * scale,
+                0, 0, scanSize * scale, scanSize * scale
+            );
+            
+            // Predict this sector
+            const prediction = await model.predict(sectorCanvas);
+            const abandoned = prediction.find(p => p.className === "Abandoned");
+            
+            if (abandoned && abandoned.probability > 0.80) { // Strict threshold
+                targetsFound++;
+                
+                // Calculate Exact Real-World Lat/Lng of this sector center
+                const centerX = x + (scanSize / 2);
+                const centerY = y + (scanSize / 2);
+                const latlng = map.containerPointToLatLng([centerX, centerY]);
+                
+                saveTarget(abandoned.probability, sectorCanvas.toDataURL(), latlng);
+            }
+        }
+    }
+    
+    if (targetsFound > 0) {
+        readout.innerText = `SCAN COMPLETE. ${targetsFound} TARGETS FOUND.`;
+        document.getElementById("confidence-meter").style.width = "100%";
+        document.getElementById("confidence-meter").style.backgroundColor = "#f00";
+    } else {
+        readout.innerText = "AREA CLEAR.";
+        document.getElementById("confidence-meter").style.width = "0%";
+    }
 }
 
-// --- DATABASE FUNCTIONS ---
-function saveTarget(confidence, imgData) {
-    const locId = Date.now();
-    const center = map.getCenter();
+// --- DATABASE & GOOGLE MAPS LINK ---
+function saveTarget(confidence, imgData, latlng) {
+    const locId = Date.now() + Math.random().toString(36).substr(2, 5);
     
-    firebase.database().ref('intel/' + locId).set({
-        lat: center.lat,
-        lng: center.lng,
+    firebase.database().ref('discovery/' + locId).set({
+        lat: latlng.lat,
+        lng: latlng.lng,
         confidence: confidence,
-        image: imgData, // Storing the base64 image directly
-        status: "UNVERIFIED",
+        image: imgData,
         timestamp: Date.now()
     });
 }
@@ -195,47 +207,36 @@ window.toggleDatabase = function() {
     
     if (el.style.display === 'none') {
         el.style.display = 'flex';
-        // Load data
-        grid.innerHTML = '<div style="color:#0f0;">DECRYPTING ARCHIVES...</div>';
+        grid.innerHTML = '<div style="color:#0f0;">RETRIEVING INTEL...</div>';
         
-        firebase.database().ref('intel/').once('value', (snapshot) => {
+        firebase.database().ref('discovery/').once('value', (snapshot) => {
             grid.innerHTML = '';
             const data = snapshot.val();
             if (data) {
-                // Show newest first
                 Object.keys(data).reverse().forEach(key => {
                     const item = data[key];
                     const div = document.createElement('div');
                     div.className = 'db-item';
                     
-                    const statusColor = item.status === "CONFIRMED" ? "#0f0" : (item.status === "FALSE_ALARM" ? "#f00" : "#aaa");
+                    // Create Google Maps Link
+                    const gmapsUrl = `https://www.google.com/maps/search/?api=1&query=${item.lat},${item.lng}`;
                     
                     div.innerHTML = `
                         <img src="${item.image}" />
                         <div class="db-info">
-                            CONF: ${(item.confidence*100).toFixed(0)}%<br>
-                            STATUS: <span style="color:${statusColor}">${item.status}</span>
+                            CONFIDENCE: ${(item.confidence*100).toFixed(0)}%<br>
+                            LAT: ${item.lat.toFixed(5)}<br>
+                            LNG: ${item.lng.toFixed(5)}
                         </div>
-                        <button class="verify-btn btn-yes" onclick="verify('${key}', 'CONFIRMED')">CONFIRM ABANDONED</button>
-                        <button class="verify-btn btn-no" onclick="verify('${key}', 'FALSE_ALARM')">FALSE POSITIVE</button>
+                        <a href="${gmapsUrl}" target="_blank" class="coord-link">OPEN IN GOOGLE MAPS</a>
                     `;
                     grid.appendChild(div);
                 });
             } else {
-                grid.innerHTML = '<div style="color:#555;">NO INTEL COLLECTED YET</div>';
+                grid.innerHTML = '<div style="color:#555;">NO DISCOVERIES YET</div>';
             }
         });
-        
     } else {
         el.style.display = 'none';
     }
-};
-
-window.verify = function(key, newStatus) {
-    firebase.database().ref('intel/' + key).update({
-        status: newStatus
-    });
-    // Refresh the view
-    toggleDatabase(); 
-    toggleDatabase(); 
 };
