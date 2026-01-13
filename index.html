@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>SATELLITE_RECON_V4</title>
+    <title>SATELLITE_RECON_GRID</title>
     
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <link rel="stylesheet" href="style.css" />
@@ -19,20 +19,30 @@
 
     <div id="ui-overlay">
         <div class="status-panel">
-            <h2>SATELLITE UPLINK V4</h2>
+            <h2>SATELLITE GRID SYSTEM</h2>
             <div id="data-stream">
                 LAT: <span id="lat-disp">--.---</span> <br>
                 LNG: <span id="lng-disp">--.---</span>
             </div>
             <div id="scan-readout">SYSTEM IDLE</div>
-            <div id="confidence-meter"></div>
             
-            <button id="mode-btn" onclick="toggleMode()">ACTIVATE TARGETING</button>
+            <button id="mode-btn" onclick="toggleMode()">ACTIVATE DRAG SCAN</button>
             <button id="db-btn" onclick="toggleDatabase()">OPEN DISCOVERY TAB</button>
             
             <div id="instruction-text" style="display:none;">
-                [!] DRAG BOX TO INITIATE GRID SCAN
+                [!] DRAG OVER CITY TO START GRID SCAN
             </div>
+        </div>
+    </div>
+
+    <div id="progress-overlay" style="display:none;">
+        <div class="progress-box">
+            <h3>SCANNING SECTOR GRID...</h3>
+            <div class="progress-track">
+                <div id="progress-fill"></div>
+            </div>
+            <div id="progress-text">0% COMPLETE</div>
+            <button onclick="cancelScan()" style="margin-top:15px; border-color:#f00; color:#f00;">ABORT MISSION</button>
         </div>
     </div>
 
@@ -40,11 +50,10 @@
 
     <div id="database-overlay" style="display:none;">
         <div class="db-header">
-            <h2>DETECTED TARGETS</h2>
+            <h2>DISCOVERED TARGETS</h2>
             <button class="close-btn" onclick="toggleDatabase()">CLOSE</button>
         </div>
-        <div id="db-grid">
-            </div>
+        <div id="db-grid"></div>
     </div>
 
     <div id="map"></div>
