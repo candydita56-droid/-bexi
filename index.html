@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>SATELLITE_RECON_V1</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="style.css" />
+    
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@latest/dist/teachablemachine-image.min.js"></script>
+    <script src="https://html2canvas.hertzen.com/dist/html2canvas.min.js"></script>
+</head>
+<body>
+
+    <div id="ui-overlay">
+        <div class="status-panel">
+            <h2>SATELLITE UPLINK ACTIVE</h2>
+            <div id="data-stream">
+                LAT: <span id="lat-disp">--.---</span> <br>
+                LNG: <span id="lng-disp">--.---</span>
+            </div>
+            <div id="scan-readout">SYSTEM IDLE</div>
+            <div id="confidence-meter" style="height: 5px; width: 0%; background: #0f0; margin: 10px 0;"></div>
+            <button id="scan-btn" onclick="initiateScan()">ANALYZE SECTOR</button>
+        </div>
+    </div>
+
+    <div id="map"></div>
+
+    <script type="module" src="script.js"></script>
+</body>
+</html>
